@@ -3,20 +3,26 @@
 // can be found in the LICENSE file in the root directory of this source tree.
 
 #include <dsn/cpp/message_utils.h>
+#include <dsn/dist/replication/duplication_common.h>
+#include <dsn/utility/defer.h>
 
-#include "base/pegasus_utils.h"
 #include "base/pegasus_key_schema.h"
 #include "pegasus_server_write.h"
 #include "pegasus_server_impl.h"
 #include "logging_utils.h"
+#include "pegasus_mutation_duplicator.h"
 
 namespace pegasus {
 namespace server {
 
+using namespace dsn::literals::chrono_literals;
+
 pegasus_server_write::pegasus_server_write(pegasus_server_impl *server, bool verbose_log)
-    : replica_base(*server), _verbose_log(verbose_log)
+    : replica_base(*server),
+      _write_svc(new pegasus_write_service(server)),
+      _server(server),
+      _verbose_log(verbose_log)
 {
-    _write_svc = dsn::make_unique<pegasus_write_service>(server);
 }
 
 int pegasus_server_write::on_batched_write_requests(dsn::message_ex **requests,
@@ -24,6 +30,7 @@ int pegasus_server_write::on_batched_write_requests(dsn::message_ex **requests,
                                                     int64_t decree,
                                                     uint64_t timestamp)
 {
+    _write_ctx = db_write_context::create(decree, timestamp);
     _decree = decree;
 
     // Write down empty record (RPC_REPLICATION_WRITE_EMPTY) to update
@@ -37,7 +44,7 @@ int pegasus_server_write::on_batched_write_requests(dsn::message_ex **requests,
     if (rpc_code == dsn::apps::RPC_RRDB_RRDB_MULTI_PUT) {
         dassert(count == 1, "count = %d", count);
         auto rpc = multi_put_rpc::auto_reply(requests[0]);
-        return _write_svc->multi_put(_decree, rpc.request(), rpc.response());
+        return _write_svc->multi_put(_write_ctx, rpc.request(), rpc.response());
     }
     if (rpc_code == dsn::apps::RPC_RRDB_RRDB_MULTI_REMOVE) {
         dassert(count == 1, "count = %d", count);
@@ -48,6 +55,11 @@ int pegasus_server_write::on_batched_write_requests(dsn::message_ex **requests,
         dassert(count == 1, "count = %d", count);
         auto rpc = incr_rpc::auto_reply(requests[0]);
         return _write_svc->incr(_decree, rpc.request(), rpc.response());
+    }
+    if (rpc_code == dsn::apps::RPC_RRDB_RRDB_DUPLICATE) {
+        dassert(count == 1, "count = %d", count);
+        auto rpc = duplicate_rpc::auto_reply(requests[0]);
+        return on_duplicate(rpc.request(), rpc.response());
     }
     if (rpc_code == dsn::apps::RPC_RRDB_RRDB_CHECK_AND_SET) {
         dassert(count == 1, "count = %d", count);
@@ -61,6 +73,56 @@ int pegasus_server_write::on_batched_write_requests(dsn::message_ex **requests,
     }
 
     return on_batched_writes(requests, count);
+}
+
+int pegasus_server_write::on_duplicate(const dsn::apps::duplicate_request &request,
+                                       dsn::apps::duplicate_response &resp)
+{
+    auto remote_timetag = static_cast<uint64_t>(request.timetag);
+    uint8_t cluster_id = extract_cluster_id_from_timetag(remote_timetag);
+    if (!dsn::replication::is_cluster_id_configured(cluster_id)) {
+        dwarn_replica("handle {} from unknown cluster_id({})", request.task_code, cluster_id);
+        resp.error = rocksdb::Status::kInvalidArgument;
+        return _write_svc->empty_put(_decree);
+    }
+    dassert_replica(cluster_id != get_current_cluster_id(), "self-duplicating is impossible");
+
+    _write_ctx = db_write_context::create_duplicate(_decree, remote_timetag);
+
+    dsn::task_code rpc_code = request.task_code;
+    dsn::message_ex *write =
+        dsn::from_blob_to_received_msg(rpc_code, dsn::blob(request.raw_message));
+
+    auto cleanup = dsn::defer([this]() {
+        uint64_t latency_us =
+            dsn_now_us() - extract_timestamp_from_timetag(_write_ctx.remote_timetag);
+        _TEST_last_duplicate_latency = latency_us * 1_us;
+        _server->update_stub_counter_dup_time_lag(latency_us);
+    });
+
+    if (rpc_code == dsn::apps::RPC_RRDB_RRDB_MULTI_PUT) {
+        multi_put_rpc rpc(write);
+        resp.error = _write_svc->duplicated_multi_put(_write_ctx, rpc.request(), rpc.response());
+        return resp.error;
+    }
+    if (rpc_code == dsn::apps::RPC_RRDB_RRDB_MULTI_REMOVE) {
+        multi_remove_rpc rpc(write);
+        resp.error = _write_svc->duplicated_multi_remove(_decree, rpc.request(), rpc.response());
+        return resp.error;
+    }
+    if (rpc_code == dsn::apps::RPC_RRDB_RRDB_PUT) {
+        put_rpc rpc(write);
+        resp.error = _write_svc->duplicated_put(_write_ctx, rpc.request(), rpc.response());
+        return resp.error;
+    }
+    if (rpc_code == dsn::apps::RPC_RRDB_RRDB_REMOVE) {
+        remove_rpc rpc(write);
+        resp.error = _write_svc->duplicated_remove(_decree, rpc.request(), rpc.response());
+        return resp.error;
+    }
+
+    dfatal_replica("invalid rpc: {}", rpc_code.to_string());
+    __builtin_unreachable();
 }
 
 void pegasus_server_write::set_default_ttl(uint32_t ttl) { _write_svc->set_default_ttl(ttl); }
@@ -91,7 +153,8 @@ int pegasus_server_write::on_batched_writes(dsn::message_ex **requests, int coun
             } else {
                 if (rpc_code == dsn::apps::RPC_RRDB_RRDB_MULTI_PUT ||
                     rpc_code == dsn::apps::RPC_RRDB_RRDB_MULTI_REMOVE ||
-                    rpc_code == dsn::apps::RPC_RRDB_RRDB_INCR) {
+                    rpc_code == dsn::apps::RPC_RRDB_RRDB_INCR ||
+                    rpc_code == dsn::apps::RPC_RRDB_RRDB_DUPLICATE) {
                     dfatal("rpc code not allow batch: %s", rpc_code.to_string());
                 } else {
                     dfatal("rpc code not handled: %s", rpc_code.to_string());
@@ -120,13 +183,11 @@ void pegasus_server_write::request_key_check(int64_t decree,
                                              dsn::message_ex *m,
                                              const dsn::blob &key)
 {
-    auto msg = (dsn::message_ex *)m;
-    if (msg->header->client.partition_hash != 0) {
+    if (m->header->client.partition_hash != 0) {
         uint64_t partition_hash = pegasus_key_hash(key);
-        dassert(msg->header->client.partition_hash == partition_hash,
-                "inconsistent partition hash");
+        dassert(m->header->client.partition_hash == partition_hash, "inconsistent partition hash");
         int thread_hash = get_gpid().thread_hash();
-        dassert(msg->header->client.thread_hash == thread_hash, "inconsistent thread hash");
+        dassert(m->header->client.thread_hash == thread_hash, "inconsistent thread hash");
     }
 
     if (_verbose_log) {
@@ -136,7 +197,7 @@ void pegasus_server_write::request_key_check(int64_t decree,
         ddebug_rocksdb("Write",
                        "decree: {}, code: {}, hash_key: {}, sort_key: {}",
                        decree,
-                       msg->local_rpc_code.to_string(),
+                       m->local_rpc_code.to_string(),
                        utils::c_escape_string(hash_key),
                        utils::c_escape_string(sort_key));
     }

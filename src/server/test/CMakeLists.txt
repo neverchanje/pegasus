@@ -5,6 +5,7 @@ set(MY_PROJ_SRC "../pegasus_server_impl.cpp"
                 "../pegasus_event_listener.cpp"
                 "../pegasus_write_service.cpp"
                 "../pegasus_server_write.cpp"
+                "../pegasus_mutation_duplicator.cpp"
                 "../capacity_unit_calculator.cpp"
 )
 
@@ -39,7 +40,6 @@ set(MY_PROJ_LIBS
         z rt aio pthread
         )
 add_definitions(-DPEGASUS_UNIT_TEST)
-add_definitions(-DENABLE_FAIL)
 
 set(MY_BOOST_PACKAGES system filesystem regex)
 

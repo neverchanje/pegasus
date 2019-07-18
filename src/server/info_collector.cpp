@@ -167,9 +167,17 @@ void info_collector::on_app_stat()
         all.rdb_block_cache_total_count += row.rdb_block_cache_total_count;
         all.rdb_index_and_filter_blocks_mem_usage += row.rdb_index_and_filter_blocks_mem_usage;
         all.rdb_memtable_mem_usage += row.rdb_memtable_mem_usage;
+        all.duplicated_put_qps += row.duplicated_put_qps;
+        all.duplicated_multi_put_qps += row.duplicated_multi_put_qps;
+        all.duplicated_remove_qps += row.duplicated_remove_qps;
+        all.duplicated_multi_remove_qps += row.duplicated_multi_remove_qps;
+        all.dup_shipped_ops += row.dup_shipped_ops;
+        all.dup_failed_shipping_ops += row.dup_failed_shipping_ops;
         read_qps[i] = row.get_qps + row.multi_get_qps + row.scan_qps;
         write_qps[i] = row.put_qps + row.multi_put_qps + row.remove_qps + row.multi_remove_qps +
-                       row.incr_qps + row.check_and_set_qps + row.check_and_mutate_qps;
+                       row.incr_qps + row.check_and_set_qps + row.check_and_mutate_qps +
+                       row.duplicated_put_qps + row.duplicated_multi_put_qps +
+                       row.duplicated_multi_remove_qps + row.duplicated_remove_qps;
     }
     read_qps[read_qps.size() - 1] = all.get_qps + all.multi_get_qps + all.scan_qps;
     write_qps[read_qps.size() - 1] = all.put_qps + all.multi_put_qps + all.remove_qps +
@@ -207,7 +215,16 @@ void info_collector::on_app_stat()
         counters->rdb_memtable_mem_usage->set(row.rdb_memtable_mem_usage);
         counters->read_qps->set(read_qps[i]);
         counters->write_qps->set(write_qps[i]);
+        counters->duplicated_put_qps->set(row.duplicated_put_qps);
+        counters->duplicated_remove_qps->set(row.duplicated_remove_qps);
+        counters->duplicated_multi_put_qps->set(row.duplicated_multi_put_qps);
+        counters->duplicated_multi_remove_qps->set(row.duplicated_multi_remove_qps);
+        counters->dup_shipped_ops->set(row.dup_shipped_ops);
+        counters->dup_failed_shipping_ops->set(row.dup_failed_shipping_ops);
     }
+    ddebug_f("stat duplication: all.dup_shipped_ops = {}, all.dup_failed_shipping_ops = {}",
+             all.dup_shipped_ops,
+             all.dup_failed_shipping_ops);
     ddebug("stat apps succeed, app_count = %d, total_read_qps = %.2f, total_write_qps = %.2f",
            (int)(rows.size() - 1),
            read_qps[read_qps.size() - 1],
@@ -232,7 +249,6 @@ info_collector::AppStatCounters *info_collector::get_app_counters(const std::str
         counters->name.init_app_counter(                                                           \
             "app.pegasus", counter_name, COUNTER_TYPE_NUMBER, counter_desc);                       \
     } while (0)
-
     INIT_COUNTER(get_qps);
     INIT_COUNTER(multi_get_qps);
     INIT_COUNTER(put_qps);
@@ -257,6 +273,12 @@ info_collector::AppStatCounters *info_collector::get_app_counters(const std::str
     INIT_COUNTER(rdb_memtable_mem_usage);
     INIT_COUNTER(read_qps);
     INIT_COUNTER(write_qps);
+    INIT_COUNTER(dup_shipped_ops);
+    INIT_COUNTER(dup_failed_shipping_ops);
+    INIT_COUNTER(duplicated_put_qps);
+    INIT_COUNTER(duplicated_remove_qps);
+    INIT_COUNTER(duplicated_multi_put_qps);
+    INIT_COUNTER(duplicated_multi_remove_qps);
     _app_stat_counters[app_name] = counters;
     return counters;
 }

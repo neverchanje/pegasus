@@ -34,12 +34,15 @@ public:
     void set_default_ttl(uint32_t ttl);
 
 private:
+    int on_duplicate(const dsn::apps::duplicate_request &request,
+                     dsn::apps::duplicate_response &resp);
+
     /// Delay replying for the batched requests until all of them complete.
     int on_batched_writes(dsn::message_ex **requests, int count);
 
     int on_single_put_in_batch(put_rpc &rpc)
     {
-        int err = _write_svc->batch_put(_decree, rpc.request(), rpc.response());
+        int err = _write_svc->batch_put(_write_ctx, rpc.request(), rpc.response());
         request_key_check(_decree, rpc.dsn_request(), rpc.request().key);
         return err;
     }
@@ -63,6 +66,10 @@ private:
     std::vector<put_rpc> _put_rpc_batch;
     std::vector<remove_rpc> _remove_rpc_batch;
 
+    std::chrono::microseconds _TEST_last_duplicate_latency{0}; // only used for test.
+    pegasus_server_impl *_server;
+
+    db_write_context _write_ctx;
     int64_t _decree;
 
     const bool _verbose_log;

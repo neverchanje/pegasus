@@ -206,3 +206,15 @@ bool sst_dump(command_executor *e, shell_context *sc, arguments args);
 bool mlog_dump(command_executor *e, shell_context *sc, arguments args);
 
 bool local_get(command_executor *e, shell_context *sc, arguments args);
+
+// == duplication (see 'commands/duplication.cpp') == //
+
+bool add_dup(command_executor *e, shell_context *sc, arguments args);
+
+bool query_dup(command_executor *e, shell_context *sc, arguments args);
+
+bool remove_dup(command_executor *e, shell_context *sc, arguments args);
+
+bool start_dup(command_executor *e, shell_context *sc, arguments args);
+
+bool pause_dup(command_executor *e, shell_context *sc, arguments args);

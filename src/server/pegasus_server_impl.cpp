@@ -1696,6 +1696,7 @@ public:
             _flag.store(false);
     }
     bool token_got() const { return _token_got; }
+
 private:
     std::atomic_bool &_flag;
     bool _token_got;
@@ -2345,10 +2346,8 @@ void pegasus_server_impl::update_usage_scenario(const std::map<std::string, std:
     if (new_usage_scenario != _usage_scenario) {
         std::string old_usage_scenario = _usage_scenario;
         if (set_usage_scenario(new_usage_scenario)) {
-            ddebug_replica("update app env[{}] from \"{}\" to \"{}\" succeed",
-                           ROCKSDB_ENV_USAGE_SCENARIO_KEY,
-                           old_usage_scenario,
-                           new_usage_scenario);
+            ddebug_replica(
+                "update app env[{}] from {} to {} succeed", old_usage_scenario, new_usage_scenario);
         } else {
             derror_replica("update app env[{}] from \"{}\" to \"{}\" failed",
                            ROCKSDB_ENV_USAGE_SCENARIO_KEY,
