@@ -18,21 +18,23 @@ using namespace dsn::replication;
 
 class pegasus_mutation_duplicator_test : public pegasus_server_test_base
 {
+protected:
     dsn::task_tracker _tracker;
     dsn::pipeline::environment _env;
+    std::unique_ptr<mutation_duplicator> duplicator;
 
 public:
     pegasus_mutation_duplicator_test()
     {
         _env.thread_pool(LPC_REPLICATION_LOW).task_tracker(&_tracker);
+
+        replica_base replica(dsn::gpid(1, 1), "fake_replica");
+        duplicator = new_mutation_duplicator(&replica, "onebox2", "temp");
+        duplicator->set_task_environment(&_env);
     }
 
     void test_duplicate()
     {
-        replica_base replica(dsn::gpid(1, 1), "fake_replica");
-        auto duplicator = new_mutation_duplicator(&replica, "onebox2", "temp");
-        duplicator->set_task_environment(&_env);
-
         mutation_tuple_set muts;
         for (uint64_t i = 0; i < 100; i++) {
             uint64_t ts = 200 + i;
@@ -86,10 +88,6 @@ public:
 
     void test_duplicate_failed()
     {
-        replica_base replica(dsn::gpid(1, 1), "fake_replica");
-        auto duplicator = new_mutation_duplicator(&replica, "onebox2", "temp");
-        duplicator->set_task_environment(&_env);
-
         mutation_tuple_set muts;
         for (uint64_t i = 0; i < 10; i++) {
             uint64_t ts = 200 + i;
@@ -149,10 +147,6 @@ public:
 
     void test_duplicate_isolated_hashkeys()
     {
-        replica_base replica(dsn::gpid(1, 1), "fake_replica");
-        auto duplicator = new_mutation_duplicator(&replica, "onebox2", "temp");
-        duplicator->set_task_environment(&_env);
-
         size_t total_size = 3000;
         mutation_tuple_set muts;
         for (uint64_t i = 0; i < total_size; i++) {
@@ -195,9 +189,6 @@ public:
 
     void test_create_duplicator()
     {
-        replica_base replica(dsn::gpid(1, 1), "fake_replica");
-        auto duplicator = new_mutation_duplicator(&replica, "onebox2", "temp");
-        duplicator->set_task_environment(&_env);
         auto duplicator_impl = dynamic_cast<pegasus_mutation_duplicator *>(duplicator.get());
         ASSERT_EQ(duplicator_impl->_remote_cluster_id, 2);
         ASSERT_EQ(duplicator_impl->_remote_cluster, "onebox2");
@@ -291,6 +282,13 @@ TEST_F(pegasus_mutation_duplicator_test, duplicate_isolated_hashkeys)
 }
 
 TEST_F(pegasus_mutation_duplicator_test, create_duplicator) { test_create_duplicator(); }
+
+TEST_F(pegasus_mutation_duplicator_test, duplicate_duplicate_rpc)
+{
+    // DUPICATE will be ignored
+    mutation_tuple_set muts{std::make_tuple(10, dsn::apps::RPC_RRDB_RRDB_DUPLICATE, dsn::blob())};
+    duplicator->duplicate(muts, [](size_t sz) { ASSERT_EQ(sz, 0); });
+}
 
 } // namespace server
 } // namespace pegasus

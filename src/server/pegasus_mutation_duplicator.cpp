@@ -133,6 +133,7 @@ void pegasus_mutation_duplicator::on_duplicate_reply(uint64_t hash,
         if (dsn::rand::next_double01() <= 0.01) {
             derror_replica("duplicate_rpc failed: {} [code:{}, timestamp:{}]",
                            err == dsn::ERR_OK ? _client->get_error_string(perr) : err.to_string(),
+                           rpc.request().task_code,
                            rpc.request().timestamp);
         }
         // duplicating an illegal write to server is unacceptable, fail fast.
@@ -173,18 +174,19 @@ void pegasus_mutation_duplicator::duplicate(mutation_tuple_set muts, callback cb
         // mut: 0=timestamp, 1=rpc_code, 2=raw_message
 
         dsn::task_code rpc_code = std::get<1>(mut);
+        if (rpc_code == dsn::apps::RPC_RRDB_RRDB_DUPLICATE) {
+            // ignore if it is a DUPLICATE
+            continue;
+        }
+
         dsn::blob raw_message = std::get<2>(mut);
         auto dreq = dsn::make_unique<dsn::apps::duplicate_request>();
         uint64_t hash = get_hash_from_request(rpc_code, raw_message);
 
-        if (rpc_code == dsn::apps::RPC_RRDB_RRDB_DUPLICATE) {
-            // ignore if it is a DUPLICATE
-        } else {
-            dreq->__set_raw_message(raw_message);
-            dreq->__set_task_code(rpc_code);
-            dreq->__set_timestamp(std::get<0>(mut));
-            dreq->__set_cluster_id(get_current_cluster_id());
-        }
+        dreq->__set_raw_message(raw_message);
+        dreq->__set_task_code(rpc_code);
+        dreq->__set_timestamp(std::get<0>(mut));
+        dreq->__set_cluster_id(get_current_cluster_id());
 
         duplicate_rpc rpc(std::move(dreq),
                           dsn::apps::RPC_RRDB_RRDB_DUPLICATE,

@@ -52,8 +52,10 @@ bool add_dup(command_executor *e, shell_context *sc, arguments args)
 
     auto err_resp = sc->ddl_client->add_dup(app_name, remote_cluster_name, freeze);
     dsn::error_s err = err_resp.get_error();
+    std::string hint;
     if (err.is_ok()) {
         err = dsn::error_s::make(err_resp.get_value().err);
+        hint = err_resp.get_value().hint;
     }
     if (!err.is_ok()) {
         fmt::print(stderr,
@@ -61,7 +63,10 @@ bool add_dup(command_executor *e, shell_context *sc, arguments args)
                    app_name,
                    remote_cluster_name,
                    freeze,
-                   err.description());
+                   err);
+        if (!hint.empty()) {
+            fmt::print(stderr, "detail:\n  {}\n", hint);
+        }
     } else {
         const auto &resp = err_resp.get_value();
         fmt::print("adding duplication succeed [app: {}, remote: {}, appid: {}, dupid: "
