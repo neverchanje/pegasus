@@ -299,12 +299,10 @@ bool redis_parser::parse_stream()
             // string content + CR + LF
             if (_total_length >= _current_str.length + 2) {
                 if (_current_str.length > 0) {
-                    char *ptr =
-                        reinterpret_cast<char *>(dsn::tls_trans_malloc(_current_str.length));
-                    std::shared_ptr<char> str_data(ptr,
-                                                   [](char *ptr) { dsn::tls_trans_free(ptr); });
-                    eat_all(str_data.get(), _current_str.length);
-                    _current_str.data.assign(std::move(str_data), 0, _current_str.length);
+                    std::string buf(_current_str.length, '\0');
+                    dsn::blob str_data = dsn::blob::create_from_bytes(std::move(buf));
+                    eat_all(str_data.buffer().get(), _current_str.length);
+                    _current_str.data = std::move(str_data);
                 }
                 dverify(eat(CR));
                 dverify(eat(LF));
