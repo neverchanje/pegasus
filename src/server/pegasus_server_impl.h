@@ -159,6 +159,7 @@ private:
     friend class manual_compact_service_test;
     friend class pegasus_compression_options_test;
     friend class pegasus_server_impl_test;
+    friend class pegasus_server_write_test;
 
     friend class pegasus_manual_compact_service;
     friend class pegasus_write_service;

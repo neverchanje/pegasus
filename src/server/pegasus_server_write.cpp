@@ -35,6 +35,20 @@ int pegasus_server_write::on_batched_write_requests(dsn::message_ex **requests,
         return _write_svc->empty_put(_decree);
     }
 
+    try {
+        return parse_and_write_requests(requests, count, decree, timestamp);
+    } catch (std::exception &e) {
+        derror_replica(
+            "failed to handle write: {} [decree: {}, ts: {}]", e.what(), decree, timestamp);
+        return _write_svc->empty_put(_decree);
+    }
+}
+
+int pegasus_server_write::parse_and_write_requests(dsn::message_ex **requests,
+                                                   int count,
+                                                   int64_t decree,
+                                                   uint64_t timestamp)
+{
     dsn::task_code rpc_code(requests[0]->rpc_code());
     if (rpc_code == dsn::apps::RPC_RRDB_RRDB_MULTI_PUT) {
         dassert(count == 1, "count = %d", count);

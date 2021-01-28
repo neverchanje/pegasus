@@ -34,6 +34,13 @@ public:
     void set_default_ttl(uint32_t ttl);
 
 private:
+    // Unmarshal the request struct from message_ex, which holds request in binary form,
+    // then write into rocksdb.
+    int parse_and_write_requests(dsn::message_ex **requests,
+                                 int count,
+                                 int64_t decree,
+                                 uint64_t timestamp);
+
     /// Delay replying for the batched requests until all of them complete.
     int on_batched_writes(dsn::message_ex **requests, int count);
 
