@@ -17,6 +17,7 @@ namespace server {
 
 class pegasus_server_write_test : public pegasus_server_test_base
 {
+protected:
     std::unique_ptr<pegasus_server_write> _server_write;
 
 public:
@@ -90,35 +91,6 @@ public:
         dsn::fail::teardown();
     }
 
-    void test_handle_malformed_write()
-    {
-        dsn::blob key;
-        pegasus_generate_key(key, std::string("hash"), std::string("sort"));
-        dsn::apps::update_request req;
-        req.key = key;
-        req.value.assign("value", 0, 5);
-
-        for (int i = 0; i < 20; i++) {
-            auto writes = new dsn::message_ex *[1];
-            writes[0] = pegasus::create_put_request(req);
-            auto cleanup = dsn::defer([=]() { delete[] writes; });
-
-            dsn::message_ex *m = writes[0];
-            dsn::blob req_body = m->buffers[m->buffers.size() - 1];
-            for (int i = 0; i < 4; i++) { // inject 4-byte fault
-                uint32_t pos = dsn::rand::next_u32(req_body.size());
-                char c = static_cast<char>(dsn::rand::next_u32(128));
-                const_cast<char *>(req_body.data())[pos] = c;
-            }
-
-            _server_write->on_batched_write_requests(writes, 1, 1001, 0);
-
-            // flush
-            rocksdb::Status status = _server->_db->Flush(rocksdb::FlushOptions{});
-            ASSERT_TRUE(status.ok());
-        }
-    }
-
     void verify_response(const dsn::apps::update_response &response, int err, int64_t decree)
     {
         ASSERT_EQ(response.error, err);
@@ -131,7 +103,41 @@ public:
 
 TEST_F(pegasus_server_write_test, batch_writes) { test_batch_writes(); }
 
-TEST_F(pegasus_server_write_test, handle_malformed_write) { test_handle_malformed_write(); }
+struct malformed_write_test : public pegasus_server_write_test, testing::WithParamInterface<int>
+{
+};
+
+TEST_P(malformed_write_test, handle_malformed_write)
+{
+    dsn::blob key;
+    pegasus_generate_key(key, std::string("hash"), std::string("sort"));
+    dsn::apps::update_request req;
+    req.key = key;
+    req.value.assign("value", 0, 5);
+
+    for (int i = 0; i < 20; i++) {
+        auto writes = new dsn::message_ex *[1];
+        writes[0] = pegasus::create_put_request(req);
+        auto cleanup = dsn::defer([=]() { delete[] writes; });
+
+        dsn::message_ex *m = writes[0];
+        dsn::blob req_body = m->buffers[m->buffers.size() - 1];
+        for (int i = 0; i < 4; i++) { // inject 4-byte fault
+            uint32_t pos = dsn::rand::next_u32(req_body.size());
+            char c = static_cast<char>(dsn::rand::next_u32(128));
+            const_cast<char *>(req_body.data())[pos] = c;
+        }
+
+        _server_write->on_batched_write_requests(writes, 1, 1001, 0);
+
+        // flush
+        rocksdb::Status status = _server->_db->Flush(rocksdb::FlushOptions{});
+        ASSERT_TRUE(status.ok());
+        ASSERT_EQ(_server->last_durable_decree(), _server->last_durable_decree());
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(random_malformed_write, malformed_write_test, testing::Range(1, 11));
 
 } // namespace server
 } // namespace pegasus
